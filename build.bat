@@ -30,31 +30,33 @@ echo [2/4] Installing dependencies...
 %VENV%\Scripts\pip install -q -r requirements.txt pyinstaller
 if %errorlevel% neq 0 ( echo [ERROR] pip install failed. & pause & exit /b 1 )
 
-:: Build into %TEMP% to avoid OneDrive locking the work directory
-set WORKDIR=%TEMP%\GardenVisitors-build
-set DISTDIR=%~dp0dist
+:: Build entirely in %TEMP% to avoid OneDrive locking files
+set BUILDROOT=%TEMP%\GardenVisitors-build
 
 echo [3/4] Building executable...
 %VENV%\Scripts\pyinstaller ^
     --name GardenVisitors ^
     --onedir ^
     --windowed ^
+    --noconfirm ^
     --collect-all PyQt6 ^
     --hidden-import cv2 ^
     --hidden-import PIL ^
     --hidden-import PIL.Image ^
-    --workpath "%WORKDIR%" ^
-    --distpath "%DISTDIR%" ^
-    --specpath "%WORKDIR%" ^
+    --workpath "%BUILDROOT%\work" ^
+    --distpath "%BUILDROOT%\dist" ^
+    --specpath "%BUILDROOT%" ^
     main.py
 
 if %errorlevel% neq 0 ( echo [ERROR] PyInstaller failed. & pause & exit /b 1 )
 
 echo [4/4] Done.
 echo.
-if exist dist\GardenVisitors\GardenVisitors.exe (
-    echo  Executable : dist\GardenVisitors\GardenVisitors.exe
-    echo  To distribute: copy the entire dist\GardenVisitors\ folder.
+if exist "%BUILDROOT%\dist\GardenVisitors\GardenVisitors.exe" (
+    echo  Executable : %BUILDROOT%\dist\GardenVisitors\GardenVisitors.exe
+    echo  To distribute: copy the entire %BUILDROOT%\dist\GardenVisitors\ folder.
+    echo.
+    explorer "%BUILDROOT%\dist\GardenVisitors"
 ) else (
     echo [WARNING] Expected exe not found — check output above.
 )
