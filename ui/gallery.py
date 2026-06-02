@@ -11,7 +11,6 @@ from core.thumbnail import ThumbnailLoader, THUMB_W, THUMB_H
 
 CARD_W = 192
 CARD_H = 172
-GRID_COLS = 4
 GRID_SPACING = 10
 
 
@@ -79,23 +78,41 @@ class GalleryWidget(QWidget):
         super().__init__(parent)
         self._cards: dict[str, ThumbnailCard] = {}
         self._selected: ThumbnailCard | None = None
+        self._media_files: list[MediaFile] = []
         self._pool = QThreadPool.globalInstance()
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
         self._grid_widget = QWidget()
         self._grid = QGridLayout(self._grid_widget)
         self._grid.setSpacing(GRID_SPACING)
         self._grid.setContentsMargins(10, 10, 10, 10)
         self._grid.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-        scroll.setWidget(self._grid_widget)
+        self._scroll.setWidget(self._grid_widget)
 
-        layout.addWidget(scroll)
+        layout.addWidget(self._scroll)
+
+    def _cols(self) -> int:
+        available = self._scroll.viewport().width() - 20
+        cols = max(1, available // (CARD_W + GRID_SPACING))
+        return cols
+
+    def _rebuild_grid(self):
+        cols = self._cols()
+        for i, mf in enumerate(self._media_files):
+            card = self._cards.get(str(mf.path))
+            if card:
+                row, col = divmod(i, cols)
+                self._grid.addWidget(card, row, col)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._rebuild_grid()
 
     def load_files(self, media_files: list[MediaFile]):
         for card in self._cards.values():
@@ -103,11 +120,13 @@ class GalleryWidget(QWidget):
             card.deleteLater()
         self._cards.clear()
         self._selected = None
+        self._media_files = media_files
 
+        cols = self._cols()
         for i, mf in enumerate(media_files):
             card = ThumbnailCard(mf)
             card.clicked.connect(self._on_card_clicked)
-            row, col = divmod(i, GRID_COLS)
+            row, col = divmod(i, cols)
             self._grid.addWidget(card, row, col)
             self._cards[str(mf.path)] = card
 

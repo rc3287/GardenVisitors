@@ -15,10 +15,13 @@ QUALITY_LABELS = ["★ Faible", "★★ Bonne", "★★★ Excellente"]
 VIDEO_EXTS = {".MP4", ".AVI", ".MOV", ".MKV"}
 IMAGE_EXTS = {".JPG", ".JPEG", ".PNG", ".BMP"}
 
+# Matches the canonical format: Jardin-YYYYMMDD-HHMMSS[ (N)]
 _FILENAME_RE = re.compile(
-    r"^Jardin-(\d{8})-(\d{6})(?:\s*\((\d+)\))?$",
+    r"^Jardin-(\d{8})-(\d{6})(?:\s*\((\d+)\))?",
     re.IGNORECASE,
 )
+# Fallback: any YYYYMMDD-HHMMSS anywhere in the stem
+_DATE_FALLBACK_RE = re.compile(r"(\d{8})-(\d{6})")
 
 
 class MediaFile:
@@ -39,9 +42,15 @@ class MediaFile:
             self._extract_exif()
 
     def _parse_filename(self):
-        m = _FILENAME_RE.match(self.path.stem)
+        stem = self.path.stem
+        m = _FILENAME_RE.match(stem)
         if m:
-            self.date_str, self.time_str, self.version = m.groups()
+            self.date_str, self.time_str, self.version = m.group(1), m.group(2), m.group(3)
+        else:
+            fb = _DATE_FALLBACK_RE.search(stem)
+            if fb:
+                self.date_str, self.time_str = fb.group(1), fb.group(2)
+        if self.date_str and self.time_str:
             try:
                 self.datetime_obj = datetime.strptime(
                     f"{self.date_str}{self.time_str}", "%Y%m%d%H%M%S"
