@@ -84,6 +84,7 @@ class VideoPreview(QWidget):
 
     def stop(self):
         self._player.stop()
+        self._player.setSource(QUrl())  # release the file handle
 
     def _toggle_play(self):
         if self._player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
@@ -243,6 +244,8 @@ class TagPanel(QWidget):
         q_btn = self._quality_group.checkedButton()
         if not a_btn or not q_btn:
             return
+        # Release any open file handle before renaming
+        self._vid_preview.stop()
         animal = ANIMALS[self._animal_group.id(a_btn)]
         quality = QUALITY_VALUES[self._quality_group.id(q_btn)]
         self.rename_requested.emit(self._media, animal, quality)
