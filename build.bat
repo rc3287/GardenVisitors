@@ -30,6 +30,10 @@ echo [2/4] Installing dependencies...
 %VENV%\Scripts\pip install -q -r requirements.txt pyinstaller
 if %errorlevel% neq 0 ( echo [ERROR] pip install failed. & pause & exit /b 1 )
 
+:: Build into %TEMP% to avoid OneDrive locking the work directory
+set WORKDIR=%TEMP%\GardenVisitors-build
+set DISTDIR=%~dp0dist
+
 echo [3/4] Building executable...
 %VENV%\Scripts\pyinstaller ^
     --name GardenVisitors ^
@@ -39,7 +43,9 @@ echo [3/4] Building executable...
     --hidden-import cv2 ^
     --hidden-import PIL ^
     --hidden-import PIL.Image ^
-    --clean ^
+    --workpath "%WORKDIR%" ^
+    --distpath "%DISTDIR%" ^
+    --specpath "%WORKDIR%" ^
     main.py
 
 if %errorlevel% neq 0 ( echo [ERROR] PyInstaller failed. & pause & exit /b 1 )
