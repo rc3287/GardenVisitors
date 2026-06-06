@@ -14,8 +14,9 @@ CARD_H = 172
 GRID_SPACING = 10
 
 _FILTER_ALL = 0
-_FILTER_RENAMED = 1
-_FILTER_UNREVIEWED = 2
+_FILTER_UNREVIEWED = 1
+_FILTER_DONE = 2
+_FILTER_TO_DELETE = 3
 
 
 class ThumbnailCard(QFrame):
@@ -101,8 +102,9 @@ class GalleryWidget(QWidget):
         self._filter_group = QButtonGroup(self)
         for fid, label in [
             (_FILTER_ALL, "Tous"),
-            (_FILTER_RENAMED, "Renommés"),
             (_FILTER_UNREVIEWED, "Non revus"),
+            (_FILTER_DONE, "Traités"),
+            (_FILTER_TO_DELETE, "À effacer"),
         ]:
             rb = QRadioButton(label)
             self._filter_group.addButton(rb, fid)
@@ -154,10 +156,12 @@ class GalleryWidget(QWidget):
 
     def _apply_filter(self):
         fid = self._filter_group.checkedId()
-        if fid == _FILTER_RENAMED:
-            self._media_files = [m for m in self._all_media_files if m.is_renamed]
-        elif fid == _FILTER_UNREVIEWED:
-            self._media_files = [m for m in self._all_media_files if not m.is_renamed]
+        if fid == _FILTER_UNREVIEWED:
+            self._media_files = [m for m in self._all_media_files if m.folder_tag == "new"]
+        elif fid == _FILTER_DONE:
+            self._media_files = [m for m in self._all_media_files if m.folder_tag == "done"]
+        elif fid == _FILTER_TO_DELETE:
+            self._media_files = [m for m in self._all_media_files if m.folder_tag == "toDelete"]
         else:
             self._media_files = list(self._all_media_files)
         self._rebuild_grid()

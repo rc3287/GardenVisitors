@@ -267,7 +267,7 @@ class TagPanel(QWidget):
 
         btn_row.addStretch()
 
-        self.delete_btn = QPushButton("Supprimer")
+        self.delete_btn = QPushButton("Rejeter")
         self.delete_btn.setObjectName("danger")
         self.delete_btn.setEnabled(False)
         self.delete_btn.clicked.connect(self._on_delete)
@@ -293,12 +293,13 @@ class TagPanel(QWidget):
         self._loading = True
         if media.datetime_obj:
             dt = media.datetime_obj
-            qdt = QDateTime(
-                QDate(dt.year, dt.month, dt.day),
-                QTime(dt.hour, dt.minute, dt.second),
-            )
         else:
-            qdt = QDateTime.currentDateTime()
+            dt = datetime.now()
+            media.datetime_obj = dt
+        qdt = QDateTime(
+            QDate(dt.year, dt.month, dt.day),
+            QTime(dt.hour, dt.minute, dt.second),
+        )
         self._datetime_edit.setDateTime(qdt)
         self._datetime_edit.setEnabled(True)
         self._loading = False

@@ -104,10 +104,21 @@ class MainWindow(QMainWindow):
         self._preview_cache.clear()
         self._media = scan_folder(folder)
         self.gallery.load_files(self._media)
-        n = len(self._media)
-        self._status.showMessage(
-            f"{n} fichier{'s' if n != 1 else ''} chargé{'s' if n != 1 else ''}"
-        )
+        counts = {"new": 0, "done": 0, "toDelete": 0, "other": 0}
+        for m in self._media:
+            counts[m.folder_tag] = counts.get(m.folder_tag, 0) + 1
+        parts = []
+        if counts["new"]:
+            parts.append(f"{counts['new']} non revu{'s' if counts['new'] != 1 else ''}")
+        if counts["done"]:
+            parts.append(f"{counts['done']} traité{'s' if counts['done'] != 1 else ''}")
+        if counts["toDelete"]:
+            parts.append(f"{counts['toDelete']} à effacer")
+        if counts["other"]:
+            parts.append(f"{counts['other']} autre{'s' if counts['other'] != 1 else ''}")
+        total = len(self._media)
+        summary = " · ".join(parts) if parts else "aucun fichier"
+        self._status.showMessage(f"{total} fichier{'s' if total != 1 else ''} — {summary}")
 
     # ------------------------------------------------------------------
     def _on_select(self, media: MediaFile):
@@ -182,33 +193,36 @@ class MainWindow(QMainWindow):
 
     def _on_delete(self, media: MediaFile):
         reply = QMessageBox.question(
-            self, "Supprimer",
-            f"Supprimer définitivement :\n{media.path.name} ?",
+            self, "Rejeter",
+            f"Déplacer vers le dossier 'toDelete' :\n{media.path.name} ?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if reply != QMessageBox.StandardButton.Yes:
             return
 
+        old_path = media.path
         old_visible = self.gallery.visible_media
         old_idx = next((i for i, m in enumerate(old_visible) if m is media), 0)
 
         try:
-            media.path.unlink()
+            new_path = media.move_to_delete_folder()
         except Exception as e:
-            QMessageBox.critical(self, "Erreur", f"Impossible de supprimer :\n{e}")
+            QMessageBox.critical(self, "Erreur", f"Impossible de déplacer :\n{e}")
             return
 
-        self._preview_cache.pop(str(media.path), None)
-        self._media.remove(media)
-        self.gallery.remove_media(media.path)
+        self._preview_cache.pop(str(old_path), None)
+        self.gallery.update_card_path(old_path, new_path)
+        self.gallery.refresh_filter()
 
         new_visible = self.gallery.visible_media
-        self._navigate_after_removal(old_idx, new_visible)
+        new_idx = next((i for i, m in enumerate(new_visible) if m is media), None)
 
-        n = len(self._media)
-        self._status.showMessage(
-            f"Supprimé. {n} fichier{'s' if n != 1 else ''} restant{'s' if n != 1 else ''}"
-        )
+        if new_idx is not None:
+            self.tag_panel.load_media(media, self._preview_cache.get(str(new_path)))
+        else:
+            self._navigate_after_removal(old_idx, new_visible)
+
+        self._status.showMessage(f"Déplacé vers toDelete → {new_path.name}")
 
     def _navigate_after_removal(self, old_idx: int, visible: list[MediaFile]):
         if visible:
