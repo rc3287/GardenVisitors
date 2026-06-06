@@ -1,7 +1,7 @@
 from pathlib import Path
 from PyQt6.QtWidgets import (
-    QWidget, QScrollArea, QGridLayout, QVBoxLayout,
-    QLabel, QFrame, QSizePolicy,
+    QWidget, QScrollArea, QGridLayout, QVBoxLayout, QHBoxLayout,
+    QLabel, QFrame, QRadioButton, QButtonGroup,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QThreadPool
 from PyQt6.QtGui import QPixmap, QPainter, QColor, QFont
@@ -12,6 +12,10 @@ from core.thumbnail import ThumbnailLoader, THUMB_W, THUMB_H
 CARD_W = 192
 CARD_H = 172
 GRID_SPACING = 10
+
+_FILTER_ALL = 0
+_FILTER_RENAMED = 1
+_FILTER_UNREVIEWED = 2
 
 
 class ThumbnailCard(QFrame):
@@ -78,12 +82,38 @@ class GalleryWidget(QWidget):
         super().__init__(parent)
         self._cards: dict[str, ThumbnailCard] = {}
         self._selected: ThumbnailCard | None = None
+        self._all_media_files: list[MediaFile] = []
         self._media_files: list[MediaFile] = []
         self._pool = QThreadPool.globalInstance()
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
+        # Filter bar
+        filter_bar = QWidget()
+        filter_bar.setObjectName("FilterBar")
+        filter_layout = QHBoxLayout(filter_bar)
+        filter_layout.setContentsMargins(10, 6, 10, 6)
+        filter_layout.setSpacing(12)
+
+        filter_layout.addWidget(QLabel("Afficher :"))
+        self._filter_group = QButtonGroup(self)
+        for fid, label in [
+            (_FILTER_ALL, "Tous"),
+            (_FILTER_RENAMED, "Renommés"),
+            (_FILTER_UNREVIEWED, "Non revus"),
+        ]:
+            rb = QRadioButton(label)
+            self._filter_group.addButton(rb, fid)
+            filter_layout.addWidget(rb)
+        self._filter_group.button(_FILTER_ALL).setChecked(True)
+        filter_layout.addStretch()
+        layout.addWidget(filter_bar)
+
+        self._filter_group.idClicked.connect(lambda _: self._apply_filter())
+
+        # Scrollable grid
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -97,12 +127,24 @@ class GalleryWidget(QWidget):
 
         layout.addWidget(self._scroll)
 
+    # ------------------------------------------------------------------
+    @property
+    def visible_media(self) -> list[MediaFile]:
+        return list(self._media_files)
+
     def _cols(self) -> int:
         available = self._scroll.viewport().width() - 20
         cols = max(1, available // (CARD_W + GRID_SPACING))
         return cols
 
     def _rebuild_grid(self):
+        visible_keys = {str(mf.path) for mf in self._media_files}
+        for key, card in self._cards.items():
+            self._grid.removeWidget(card)
+            if key in visible_keys:
+                card.show()
+            else:
+                card.hide()
         cols = self._cols()
         for i, mf in enumerate(self._media_files):
             card = self._cards.get(str(mf.path))
@@ -110,17 +152,33 @@ class GalleryWidget(QWidget):
                 row, col = divmod(i, cols)
                 self._grid.addWidget(card, row, col)
 
+    def _apply_filter(self):
+        fid = self._filter_group.checkedId()
+        if fid == _FILTER_RENAMED:
+            self._media_files = [m for m in self._all_media_files if m.is_renamed]
+        elif fid == _FILTER_UNREVIEWED:
+            self._media_files = [m for m in self._all_media_files if not m.is_renamed]
+        else:
+            self._media_files = list(self._all_media_files)
+        self._rebuild_grid()
+
+    def refresh_filter(self):
+        self._apply_filter()
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._rebuild_grid()
 
+    # ------------------------------------------------------------------
     def load_files(self, media_files: list[MediaFile]):
         for card in self._cards.values():
             self._grid.removeWidget(card)
             card.deleteLater()
         self._cards.clear()
         self._selected = None
-        self._media_files = media_files
+        self._all_media_files = media_files
+        self._media_files = list(media_files)
+        self._filter_group.button(_FILTER_ALL).setChecked(True)
 
         cols = self._cols()
         for i, mf in enumerate(media_files):
@@ -147,6 +205,21 @@ class GalleryWidget(QWidget):
             card.set_selected(True)
             self._selected = card
         self.media_selected.emit(media)
+
+    def select_media(self, media: MediaFile):
+        self._on_card_clicked(media)
+
+    def remove_media(self, path: Path):
+        key = str(path)
+        card = self._cards.pop(key, None)
+        if card:
+            self._grid.removeWidget(card)
+            card.deleteLater()
+            if self._selected is card:
+                self._selected = None
+        self._all_media_files = [m for m in self._all_media_files if str(m.path) != key]
+        self._media_files = [m for m in self._media_files if str(m.path) != key]
+        self._rebuild_grid()
 
     def update_card_path(self, old_path: Path, new_path: Path):
         card = self._cards.pop(str(old_path), None)

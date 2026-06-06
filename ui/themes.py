@@ -30,6 +30,25 @@ QPushButton#secondary {
 }
 QPushButton#secondary:hover { background-color: #45475A; }
 
+QPushButton#nav {
+    background-color: #313244; color: #CDD6F4;
+    padding: 6px 4px; font-size: 16px; border-radius: 8px;
+}
+QPushButton#nav:hover { background-color: #45475A; }
+QPushButton#nav:pressed { background-color: #585B70; }
+
+QPushButton#danger {
+    background-color: #F38BA8; color: #1E1E2E;
+}
+QPushButton#danger:hover { background-color: #EBA0AC; }
+QPushButton#danger:pressed { background-color: #E77090; }
+QPushButton#danger:disabled { background-color: #45475A; color: #6C7086; }
+
+QWidget#FilterBar {
+    background-color: #181825;
+    border-bottom: 1px solid #313244;
+}
+
 QRadioButton { color: #CDD6F4; spacing: 8px; padding: 3px 0; }
 QRadioButton::indicator {
     width: 16px; height: 16px; border-radius: 8px;
@@ -50,6 +69,14 @@ QGroupBox::title {
 QLabel { color: #CDD6F4; }
 QLabel#dim { color: #A6ADC8; font-size: 11px; }
 QLabel#accent { color: #94E2D5; font-size: 11px; font-style: italic; }
+
+QLineEdit {
+    background-color: #313244; color: #CDD6F4;
+    border: 1px solid #45475A; border-radius: 6px;
+    padding: 4px 8px;
+}
+QLineEdit:focus { border-color: #94E2D5; }
+QLineEdit:disabled { background-color: #1E1E2E; color: #585B70; }
 
 QSplitter::handle:horizontal { background-color: #313244; width: 3px; }
 
@@ -115,6 +142,25 @@ QPushButton#secondary {
 }
 QPushButton#secondary:hover { background-color: #BDBDBD; }
 
+QPushButton#nav {
+    background-color: #E0E0E0; color: #2C2C3E;
+    padding: 6px 4px; font-size: 16px; border-radius: 8px;
+}
+QPushButton#nav:hover { background-color: #BDBDBD; }
+QPushButton#nav:pressed { background-color: #9E9E9E; }
+
+QPushButton#danger {
+    background-color: #D32F2F; color: #FFFFFF;
+}
+QPushButton#danger:hover { background-color: #B71C1C; }
+QPushButton#danger:pressed { background-color: #9A0000; }
+QPushButton#danger:disabled { background-color: #E0E0E0; color: #9E9E9E; }
+
+QWidget#FilterBar {
+    background-color: #FFFFFF;
+    border-bottom: 1px solid #E0E0E0;
+}
+
 QRadioButton { color: #2C2C3E; spacing: 8px; padding: 3px 0; }
 QRadioButton::indicator {
     width: 16px; height: 16px; border-radius: 8px;
@@ -136,6 +182,14 @@ QGroupBox::title {
 QLabel { color: #2C2C3E; }
 QLabel#dim { color: #757575; font-size: 11px; }
 QLabel#accent { color: #00897B; font-size: 11px; font-style: italic; }
+
+QLineEdit {
+    background-color: #FFFFFF; color: #2C2C3E;
+    border: 1px solid #BDBDBD; border-radius: 6px;
+    padding: 4px 8px;
+}
+QLineEdit:focus { border-color: #00897B; }
+QLineEdit:disabled { background-color: #F5F5F5; color: #9E9E9E; }
 
 QSplitter::handle:horizontal { background-color: #E0E0E0; width: 3px; }
 

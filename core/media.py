@@ -22,6 +22,8 @@ _FILENAME_RE = re.compile(
 )
 # Fallback: any YYYYMMDD-HHMMSS anywhere in the stem
 _DATE_FALLBACK_RE = re.compile(r"(\d{8})-(\d{6})")
+# Renamed files always end with -q1, -q2, or -q3 before the extension
+_RENAMED_RE = re.compile(r"-q[123]$", re.IGNORECASE)
 
 
 class MediaFile:
@@ -86,7 +88,7 @@ class MediaFile:
             self.version or "0",
         )
 
-    def build_new_name(self, animal: str, quality: str) -> str:
+    def build_new_name(self, animal: str, quality: str, dup: int = 0) -> str:
         if self.datetime_obj:
             base = self.datetime_obj.strftime("%Y%m%d-%H%M%S")
         elif self.date_str and self.time_str:
@@ -102,16 +104,33 @@ class MediaFile:
         if not self.subsec and self.version:
             name = f"{name} ({self.version})"
 
+        if dup > 0:
+            name = f"{name} ({dup})"
+
         return name + self.path.suffix
 
+    def build_unique_name(self, animal: str, quality: str) -> str:
+        dup = 0
+        while True:
+            candidate = self.path.parent / self.build_new_name(animal, quality, dup)
+            if not candidate.exists() or candidate == self.path:
+                return candidate.name
+            dup += 1
+
     def rename(self, animal: str, quality: str) -> Path:
-        new_name = self.build_new_name(animal, quality)
+        return self.rename_to(self.build_unique_name(animal, quality))
+
+    def rename_to(self, new_name: str) -> Path:
         new_path = self.path.parent / new_name
         if new_path.exists() and new_path != self.path:
             raise FileExistsError(f"Le fichier existe déjà : {new_name}")
         self.path.rename(new_path)
         self.path = new_path
         return new_path
+
+    @property
+    def is_renamed(self) -> bool:
+        return bool(_RENAMED_RE.search(self.path.stem))
 
     @property
     def display_date(self) -> str:

@@ -50,6 +50,9 @@ class MainWindow(QMainWindow):
 
         self.tag_panel = TagPanel()
         self.tag_panel.rename_requested.connect(self._on_rename)
+        self.tag_panel.delete_requested.connect(self._on_delete)
+        self.tag_panel.prev_requested.connect(self._on_prev)
+        self.tag_panel.next_requested.connect(self._on_next)
         self._splitter.addWidget(self.tag_panel)
 
         self._splitter.setSizes([460, 840])
@@ -125,16 +128,35 @@ class MainWindow(QMainWindow):
             self.tag_panel.update_preview_pixmap(pixmap)
 
     # ------------------------------------------------------------------
-    def _on_rename(self, media: MediaFile, animal: str, quality: str):
+    def _on_prev(self):
+        if self._current is None:
+            return
+        visible = self.gallery.visible_media
+        idx = next((i for i, m in enumerate(visible) if m is self._current), -1)
+        if idx > 0:
+            self.gallery.select_media(visible[idx - 1])
+
+    def _on_next(self):
+        if self._current is None:
+            return
+        visible = self.gallery.visible_media
+        idx = next((i for i, m in enumerate(visible) if m is self._current), -1)
+        if idx < len(visible) - 1:
+            self.gallery.select_media(visible[idx + 1])
+
+    def _on_rename(self, media: MediaFile, new_name: str):
         old_path = media.path
         try:
-            new_path = media.rename(animal, quality)
+            new_path = media.rename_to(new_name)
         except FileExistsError as e:
-            QMessageBox.warning(self, "Erreur", str(e))
+            QMessageBox.warning(self, "Conflit de nom", str(e))
             return
         except Exception as e:
             QMessageBox.critical(self, "Erreur", f"Impossible de renommer :\n{e}")
             return
+
+        old_visible = self.gallery.visible_media
+        old_idx = next((i for i, m in enumerate(old_visible) if m is media), 0)
 
         self.gallery.update_card_path(old_path, new_path)
 
@@ -142,5 +164,56 @@ class MainWindow(QMainWindow):
         if cached:
             self._preview_cache[str(new_path)] = cached
 
-        self.tag_panel.load_media(media, self._preview_cache.get(str(new_path)))
+        self.gallery.refresh_filter()
+
+        new_visible = self.gallery.visible_media
+        new_idx = next((i for i, m in enumerate(new_visible) if m is media), None)
+
+        if new_idx is not None and new_idx < len(new_visible) - 1:
+            self.gallery.select_media(new_visible[new_idx + 1])
+        elif new_idx is not None:
+            # Renamed file is last in the current view — stay on it
+            self.tag_panel.load_media(media, self._preview_cache.get(str(new_path)))
+        else:
+            # File disappeared from the active filter (e.g. "Non revus" after rename)
+            self._navigate_after_removal(old_idx, new_visible)
+
         self._status.showMessage(f"Renommé → {new_path.name}")
+
+    def _on_delete(self, media: MediaFile):
+        reply = QMessageBox.question(
+            self, "Supprimer",
+            f"Supprimer définitivement :\n{media.path.name} ?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        old_visible = self.gallery.visible_media
+        old_idx = next((i for i, m in enumerate(old_visible) if m is media), 0)
+
+        try:
+            media.path.unlink()
+        except Exception as e:
+            QMessageBox.critical(self, "Erreur", f"Impossible de supprimer :\n{e}")
+            return
+
+        self._preview_cache.pop(str(media.path), None)
+        self._media.remove(media)
+        self.gallery.remove_media(media.path)
+
+        new_visible = self.gallery.visible_media
+        self._navigate_after_removal(old_idx, new_visible)
+
+        n = len(self._media)
+        self._status.showMessage(
+            f"Supprimé. {n} fichier{'s' if n != 1 else ''} restant{'s' if n != 1 else ''}"
+        )
+
+    def _navigate_after_removal(self, old_idx: int, visible: list[MediaFile]):
+        if visible:
+            nav_idx = min(old_idx, len(visible) - 1)
+            self.gallery.select_media(visible[nav_idx])
+        else:
+            self._current = None
+            self.tag_panel.clear()
