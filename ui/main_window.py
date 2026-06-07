@@ -46,6 +46,7 @@ class MainWindow(QMainWindow):
 
         self.gallery = GalleryWidget()
         self.gallery.media_selected.connect(self._on_select)
+        self.gallery.batch_reject_requested.connect(self._on_batch_reject)
         self._splitter.addWidget(self.gallery)
 
         self.tag_panel = TagPanel()
@@ -217,12 +218,68 @@ class MainWindow(QMainWindow):
         new_visible = self.gallery.visible_media
         new_idx = next((i for i, m in enumerate(new_visible) if m is media), None)
 
-        if new_idx is not None:
+        if new_idx is not None and new_idx < len(new_visible) - 1:
+            self.gallery.select_media(new_visible[new_idx + 1])
+        elif new_idx is not None:
+            # Rejected file is last in the current view — stay on it
             self.tag_panel.load_media(media, self._preview_cache.get(str(new_path)))
         else:
             self._navigate_after_removal(old_idx, new_visible)
 
         self._status.showMessage(f"Déplacé vers toDelete → {new_path.name}")
+
+    def _on_batch_reject(self, media_list: list[MediaFile]):
+        if not media_list:
+            return
+        count = len(media_list)
+        reply = QMessageBox.question(
+            self, "Rejeter la sélection",
+            f"Déplacer {count} fichier{'s' if count != 1 else ''} vers le dossier 'toDelete' ?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        old_visible = self.gallery.visible_media
+        current_in_batch = self._current in media_list
+        old_idx = (
+            next((i for i, m in enumerate(old_visible) if m is self._current), 0)
+            if current_in_batch else 0
+        )
+
+        moved = 0
+        errors = []
+        for media in media_list:
+            old_path = media.path
+            try:
+                new_path = media.move_to_delete_folder()
+            except Exception as e:
+                errors.append(f"{old_path.name} : {e}")
+                continue
+            self._preview_cache.pop(str(old_path), None)
+            self.gallery.update_card_path(old_path, new_path)
+            moved += 1
+
+        self.gallery.clear_marked()
+        self.gallery.refresh_filter()
+
+        if current_in_batch:
+            new_visible = self.gallery.visible_media
+            new_idx = next((i for i, m in enumerate(new_visible) if m is self._current), None)
+            if new_idx is not None:
+                self.tag_panel.load_media(self._current, self._preview_cache.get(str(self._current.path)))
+            else:
+                self._navigate_after_removal(old_idx, new_visible)
+
+        if errors:
+            QMessageBox.warning(
+                self, "Erreurs",
+                f"{moved} fichier{'s' if moved != 1 else ''} déplacé{'s' if moved != 1 else ''}.\n"
+                "Échecs :\n" + "\n".join(errors),
+            )
+        self._status.showMessage(
+            f"{moved} fichier{'s' if moved != 1 else ''} rejeté{'s' if moved != 1 else ''} → toDelete"
+        )
 
     def _navigate_after_removal(self, old_idx: int, visible: list[MediaFile]):
         if visible:

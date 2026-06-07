@@ -108,6 +108,15 @@ QFrame#ThumbnailCard[selected="true"] {
     background-color: #313244;
     border: 2px solid #94E2D5;
 }
+QFrame#ThumbnailCard[marked="true"] {
+    border: 2px solid #F38BA8;
+}
+
+QWidget#SelectionBar {
+    background-color: #181825;
+    border-bottom: 1px solid #313244;
+}
+QWidget#SelectionBar QLabel { color: #F38BA8; font-weight: bold; }
 """
 
 LIGHT = """
@@ -221,4 +230,13 @@ QFrame#ThumbnailCard[selected="true"] {
     background-color: #E0F2F1;
     border: 2px solid #00897B;
 }
+QFrame#ThumbnailCard[marked="true"] {
+    border: 2px solid #D32F2F;
+}
+
+QWidget#SelectionBar {
+    background-color: #FFFFFF;
+    border-bottom: 1px solid #E0E0E0;
+}
+QWidget#SelectionBar QLabel { color: #D32F2F; font-weight: bold; }
 """

@@ -4,6 +4,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QStackedWidget,
     QRadioButton, QButtonGroup, QGroupBox, QPushButton, QSlider,
     QDialog, QLineEdit, QDialogButtonBox, QDateTimeEdit,
+    QComboBox, QStyle,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QUrl, QDateTime, QDate, QTime
 from PyQt6.QtGui import QPixmap
@@ -65,6 +66,21 @@ class ScaledPreview(QLabel):
             self.setPixmap(QPixmap())
 
 
+class ClickableSlider(QSlider):
+    """Slider that jumps straight to the clicked position instead of stepping."""
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            value = QStyle.sliderValueFromPosition(
+                self.minimum(), self.maximum(), int(event.position().x()), self.width()
+            )
+            self.setValue(value)
+            self.sliderMoved.emit(value)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+
 class VideoPreview(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -81,7 +97,7 @@ class VideoPreview(QWidget):
         self._play_btn.setFixedWidth(40)
         self._play_btn.clicked.connect(self._toggle_play)
 
-        self._slider = QSlider(Qt.Orientation.Horizontal)
+        self._slider = ClickableSlider(Qt.Orientation.Horizontal)
         self._slider.setRange(0, 1000)
         self._slider.sliderMoved.connect(self._seek)
 
@@ -89,9 +105,15 @@ class VideoPreview(QWidget):
         self._time_label.setObjectName("dim")
         self._time_label.setFixedWidth(40)
 
+        self._speed_combo = QComboBox()
+        self._speed_combo.addItems(["x1", "x2", "x5", "x10"])
+        self._speed_combo.setFixedWidth(56)
+        self._speed_combo.currentTextChanged.connect(self._on_speed_changed)
+
         controls.addWidget(self._play_btn)
         controls.addWidget(self._slider, stretch=1)
         controls.addWidget(self._time_label)
+        controls.addWidget(self._speed_combo)
         layout.addLayout(controls)
 
         self._player = QMediaPlayer()
@@ -103,6 +125,7 @@ class VideoPreview(QWidget):
         self._player.durationChanged.connect(self._on_duration)
 
         self._duration = 0
+        self._rate = 1.0
 
     def load(self, path):
         self._player.stop()
@@ -110,6 +133,7 @@ class VideoPreview(QWidget):
         self._play_btn.setText("▶")
         self._slider.setValue(0)
         self._time_label.setText("0:00")
+        self._player.setPlaybackRate(self._rate)
         self._player.play()
 
     def stop(self):
@@ -125,6 +149,10 @@ class VideoPreview(QWidget):
     def _seek(self, value: int):
         if self._duration:
             self._player.setPosition(int(value * self._duration / 1000))
+
+    def _on_speed_changed(self, text: str):
+        self._rate = float(text[1:])
+        self._player.setPlaybackRate(self._rate)
 
     def _on_state_changed(self, state):
         if state == QMediaPlayer.PlaybackState.PlayingState:
