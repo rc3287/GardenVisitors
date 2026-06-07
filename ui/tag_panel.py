@@ -4,9 +4,9 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QStackedWidget,
     QRadioButton, QButtonGroup, QGroupBox, QPushButton, QSlider,
     QDialog, QLineEdit, QDialogButtonBox, QDateTimeEdit,
-    QComboBox, QStyle,
+    QComboBox, QStyle, QApplication,
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QUrl, QDateTime, QDate, QTime
+from PyQt6.QtCore import Qt, pyqtSignal, QUrl, QDateTime, QDate, QTime, QSettings
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PyQt6.QtMultimediaWidgets import QVideoWidget
@@ -173,13 +173,16 @@ class VideoPreview(QWidget):
 class TagPanel(QWidget):
     rename_requested = pyqtSignal(object, str)  # MediaFile, new_filename
     delete_requested = pyqtSignal(object)             # MediaFile
+    edit_requested = pyqtSignal(object)               # MediaFile (images only)
     prev_requested = pyqtSignal()
     next_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._media: MediaFile | None = None
-        self._animal_names: list[str] = list(ANIMALS)
+        self._settings = QSettings("GardenVisitors", "GardenVisitors")
+        self._animal_names: list[str] = self._load_animal_names()
         self._loading = False
         self._last_animal_id: int | None = None
         self._last_quality_id: int | None = None
@@ -239,6 +242,7 @@ class TagPanel(QWidget):
         self._animal_group = QButtonGroup(self)
         for i, name in enumerate(self._animal_names):
             rb = QRadioButton(name)
+            rb.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             self._animal_group.addButton(rb, i)
             self._animal_layout.addWidget(rb)
 
@@ -258,6 +262,7 @@ class TagPanel(QWidget):
         self._quality_group = QButtonGroup(self)
         for i, label in enumerate(QUALITY_LABELS):
             rb = QRadioButton(label)
+            rb.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             self._quality_group.addButton(rb, i)
             quality_layout.addWidget(rb)
         quality_layout.addStretch()
@@ -293,6 +298,12 @@ class TagPanel(QWidget):
         self.rename_btn.clicked.connect(self._on_rename)
         btn_row.addWidget(self.rename_btn)
 
+        self.edit_btn = QPushButton("Améliorer")
+        self.edit_btn.setObjectName("secondary")
+        self.edit_btn.setEnabled(False)
+        self.edit_btn.clicked.connect(self._on_edit)
+        btn_row.addWidget(self.edit_btn)
+
         btn_row.addStretch()
 
         self.delete_btn = QPushButton("Rejeter")
@@ -303,8 +314,18 @@ class TagPanel(QWidget):
 
         root.addLayout(btn_row)
 
+        hint = QLabel(
+            "Raccourcis : 1-9 animal · F1-F3 qualité · "
+            "Entrée renommer · Suppr rejeter · ← → précédent/suivant"
+        )
+        hint.setObjectName("dim")
+        hint.setWordWrap(True)
+        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        root.addWidget(hint)
+
         self._animal_group.idClicked.connect(self._update_new_name)
         self._quality_group.idClicked.connect(self._update_new_name)
+        self._proposed_edit.returnPressed.connect(self._on_rename)
 
     # ------------------------------------------------------------------
     def load_media(self, media: MediaFile, pixmap: QPixmap | None = None):
@@ -353,6 +374,7 @@ class TagPanel(QWidget):
         self._current_name_label.setText(media.path.name)
         self._proposed_edit.clear()   # textChanged → rename_btn disabled
         self.delete_btn.setEnabled(True)
+        self.edit_btn.setEnabled(media.is_image)   # enhancement is image-only
         self._update_new_name(0)  # fills proposed_edit if selections are restored
 
         if media.is_video:
@@ -367,6 +389,8 @@ class TagPanel(QWidget):
             else:
                 self._img_preview.set_source(None)
                 self._img_preview.setText("Chargement…")
+
+        self.setFocus()
 
     def update_preview_pixmap(self, pixmap: QPixmap):
         if self._media and not self._media.is_video and pixmap and not pixmap.isNull():
@@ -385,6 +409,24 @@ class TagPanel(QWidget):
         )
         self._update_new_name(0)
 
+    # --- Custom animal persistence (QSettings) --------------------------
+    def _load_animal_names(self) -> list[str]:
+        names = list(ANIMALS)
+        saved = self._settings.value("custom_animals", [])
+        if isinstance(saved, str):
+            saved = [saved] if saved else []
+        elif not isinstance(saved, list):
+            saved = []
+        for name in saved:
+            name = str(name).strip()
+            if name and name not in names:
+                names.append(name)
+        return names
+
+    def _save_animal_names(self):
+        custom = [n for n in self._animal_names if n not in ANIMALS]
+        self._settings.setValue("custom_animals", custom)
+
     def _add_animal(self):
         dialog = AddAnimalDialog(self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
@@ -392,13 +434,54 @@ class TagPanel(QWidget):
             if not name or name in self._animal_names:
                 return
             self._animal_names.append(name)
+            self._save_animal_names()
             rb = QRadioButton(name)
+            rb.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             new_id = len(self._animal_names) - 1
             self._animal_group.addButton(rb, new_id)
             # Insert before the "+" button and stretch (last 2 items)
             self._animal_layout.insertWidget(self._animal_layout.count() - 2, rb)
-            rb.setChecked(True)
-            self._update_new_name(new_id)
+            self._select_animal(new_id)
+
+    # --- Keyboard shortcuts (see hint label for the full list) ----------
+    def _select_animal(self, index: int):
+        btn = self._animal_group.button(index)
+        if btn:
+            btn.setChecked(True)
+            self._update_new_name(index)
+
+    def _select_quality(self, index: int):
+        btn = self._quality_group.button(index)
+        if btn:
+            btn.setChecked(True)
+            self._update_new_name(index)
+
+    def keyPressEvent(self, event):
+        # Let the user type freely in the editable fields — no shortcuts there.
+        focus = QApplication.focusWidget()
+        if focus is self._proposed_edit or focus is self._datetime_edit:
+            super().keyPressEvent(event)
+            return
+
+        key = event.key()
+        if key == Qt.Key.Key_Left:
+            self.prev_requested.emit()
+        elif key == Qt.Key.Key_Right:
+            self.next_requested.emit()
+        elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            if self.rename_btn.isEnabled():
+                self._on_rename()
+        elif key == Qt.Key.Key_Delete:
+            if self.delete_btn.isEnabled():
+                self._on_delete()
+        elif Qt.Key.Key_F1 <= key <= Qt.Key.Key_F3:
+            self._select_quality(key - Qt.Key.Key_F1)
+        elif Qt.Key.Key_1 <= key <= Qt.Key.Key_9:
+            self._select_animal(key - Qt.Key.Key_1)
+        else:
+            super().keyPressEvent(event)
+            return
+        event.accept()
 
     def _on_proposed_changed(self, text: str):
         self.rename_btn.setEnabled(bool(text.strip()) and self._media is not None)
@@ -429,6 +512,15 @@ class TagPanel(QWidget):
         self._vid_preview.stop()
         self.delete_requested.emit(self._media)
 
+    def _on_edit(self):
+        if self._media and self._media.is_image:
+            self.edit_requested.emit(self._media)
+
+    def stop_video(self):
+        """Release the QMediaPlayer's file handle — required before any
+        external code renames/moves the currently displayed media file."""
+        self._vid_preview.stop()
+
     def clear(self):
         self._media = None
         self._vid_preview.stop()
@@ -439,6 +531,7 @@ class TagPanel(QWidget):
         self._current_name_label.clear()
         self._proposed_edit.clear()   # textChanged → rename_btn disabled
         self.delete_btn.setEnabled(False)
+        self.edit_btn.setEnabled(False)
         self._animal_group.setExclusive(False)
         for b in self._animal_group.buttons():
             b.setChecked(False)

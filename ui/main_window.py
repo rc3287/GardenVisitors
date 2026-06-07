@@ -3,13 +3,14 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QSplitter,
     QFileDialog, QStatusBar, QMessageBox,
 )
-from PyQt6.QtCore import Qt, QThreadPool
+from PyQt6.QtCore import Qt, QThreadPool, QSettings
 from PyQt6.QtGui import QAction, QPixmap
 
-from core.media import MediaFile, scan_folder
+from core.media import MediaFile, scan_folder, VIDEO_EXTS, IMAGE_EXTS
 from core.thumbnail import ThumbnailLoader
 from ui.gallery import GalleryWidget
 from ui.tag_panel import TagPanel
+from ui.editor import EditorDialog
 from ui import themes
 
 DEFAULT_FOLDER = Path(r"C:\Users\Renau\OneDrive\Caméra jardin")
@@ -19,19 +20,49 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("GardenVisitors")
-        self.resize(1300, 820)
-        self._theme = "dark"
+        self._settings = QSettings("GardenVisitors", "GardenVisitors")
+        self._theme = self._settings.value("theme", "dark")
         self._media: list[MediaFile] = []
         self._current: MediaFile | None = None
         self._preview_cache: dict[str, QPixmap] = {}
+        self._last_action: list[tuple[Path, Path]] | None = None  # (current_path, original_path)
         self._pool = QThreadPool.globalInstance()
 
         self._build_ui()
         self._build_menu()
         self._apply_theme()
+        self._restore_geometry()
 
-        if DEFAULT_FOLDER.exists():
-            self._load_folder(DEFAULT_FOLDER)
+        folder = self._startup_folder()
+        if folder is not None:
+            self._load_folder(folder)
+
+    # ------------------------------------------------------------------
+    def _startup_folder(self) -> Path | None:
+        saved = self._settings.value("last_folder")
+        if saved:
+            path = Path(saved)
+            if path.exists():
+                return path
+        return DEFAULT_FOLDER if DEFAULT_FOLDER.exists() else None
+
+    def _restore_geometry(self):
+        geometry = self._settings.value("window/geometry")
+        if geometry is not None:
+            self.restoreGeometry(geometry)
+        else:
+            self.resize(1300, 820)
+        sizes = self._settings.value("window/splitter_sizes")
+        if sizes:
+            try:
+                self._splitter.setSizes([int(s) for s in sizes])
+            except (TypeError, ValueError):
+                pass
+
+    def closeEvent(self, event):
+        self._settings.setValue("window/geometry", self.saveGeometry())
+        self._settings.setValue("window/splitter_sizes", self._splitter.sizes())
+        super().closeEvent(event)
 
     # ------------------------------------------------------------------
     def _build_ui(self):
@@ -52,6 +83,7 @@ class MainWindow(QMainWindow):
         self.tag_panel = TagPanel()
         self.tag_panel.rename_requested.connect(self._on_rename)
         self.tag_panel.delete_requested.connect(self._on_delete)
+        self.tag_panel.edit_requested.connect(self._on_edit)
         self.tag_panel.prev_requested.connect(self._on_prev)
         self.tag_panel.next_requested.connect(self._on_next)
         self._splitter.addWidget(self.tag_panel)
@@ -76,6 +108,13 @@ class MainWindow(QMainWindow):
         quit_a.triggered.connect(self.close)
         file_m.addAction(quit_a)
 
+        edit_m = mb.addMenu("Édition")
+        self._undo_action = QAction("Annuler", self)
+        self._undo_action.setShortcut("Ctrl+Z")
+        self._undo_action.setEnabled(False)
+        self._undo_action.triggered.connect(self._on_undo)
+        edit_m.addAction(self._undo_action)
+
         view_m = mb.addMenu("Affichage")
         dark_a = QAction("Thème sombre", self)
         dark_a.triggered.connect(lambda: self._set_theme("dark"))
@@ -90,6 +129,7 @@ class MainWindow(QMainWindow):
     def _set_theme(self, theme: str):
         self._theme = theme
         self._apply_theme()
+        self._settings.setValue("theme", theme)
 
     # ------------------------------------------------------------------
     def _open_dialog(self):
@@ -100,12 +140,62 @@ class MainWindow(QMainWindow):
         if folder:
             self._load_folder(Path(folder))
 
+    def _maybe_offer_setup(self, folder: Path):
+        """If the folder has no managed subfolders but contains loose media
+        files directly inside it, offer once to create 'new/' and move them
+        in. Opt-in only — never moves files without confirmation."""
+        if any((folder / sub).exists() for sub in ("new", "done", "toDelete")):
+            return
+
+        all_exts = VIDEO_EXTS | IMAGE_EXTS
+        loose = [
+            f for f in folder.iterdir()
+            if f.is_file() and f.suffix.upper() in all_exts
+        ]
+        if not loose:
+            return
+
+        asked = self._settings.value("setup_offer_asked", [])
+        if isinstance(asked, str):
+            asked = [asked] if asked else []
+        folder_str = str(folder)
+        if folder_str in asked:
+            return
+        asked.append(folder_str)
+        self._settings.setValue("setup_offer_asked", asked)
+
+        reply = QMessageBox.question(
+            self, "Organiser le dossier",
+            f"Ce dossier contient {len(loose)} fichier{'s' if len(loose) != 1 else ''} média "
+            "sans la structure 'new / done / toDelete'.\n\n"
+            "Créer le dossier 'new' et y déplacer ces fichiers ?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        new_dir = folder / "new"
+        new_dir.mkdir(exist_ok=True)
+        errors = []
+        for f in loose:
+            try:
+                f.rename(new_dir / f.name)
+            except OSError as e:
+                errors.append(f"{f.name} : {e}")
+        if errors:
+            QMessageBox.warning(
+                self, "Erreurs",
+                "Certains fichiers n'ont pas pu être déplacés :\n" + "\n".join(errors),
+            )
+
     def _load_folder(self, folder: Path):
         self._status.showMessage(f"Chargement de {folder} …")
+        self._settings.setValue("last_folder", str(folder))
         self._preview_cache.clear()
+        self._maybe_offer_setup(folder)
         self._media = scan_folder(folder)
         self.gallery.load_files(self._media)
-        counts = {"new": 0, "done": 0, "toDelete": 0, "other": 0}
+        counts = {"new": 0, "done": 0, "toDelete": 0, "edited": 0, "other": 0}
         for m in self._media:
             counts[m.folder_tag] = counts.get(m.folder_tag, 0) + 1
         parts = []
@@ -113,6 +203,8 @@ class MainWindow(QMainWindow):
             parts.append(f"{counts['new']} non revu{'s' if counts['new'] != 1 else ''}")
         if counts["done"]:
             parts.append(f"{counts['done']} traité{'s' if counts['done'] != 1 else ''}")
+        if counts["edited"]:
+            parts.append(f"{counts['edited']} édité{'s' if counts['edited'] != 1 else ''}")
         if counts["toDelete"]:
             parts.append(f"{counts['toDelete']} à effacer")
         if counts["other"]:
@@ -133,6 +225,26 @@ class MainWindow(QMainWindow):
         loader = ThumbnailLoader(media.path, preview=True)
         loader.signals.ready.connect(self._on_preview_ready)
         self._pool.start(loader)
+
+    def _on_edit(self, media: MediaFile):
+        if not media.is_image:
+            return
+        try:
+            dialog = EditorDialog(media, self)
+        except Exception as e:
+            QMessageBox.critical(self, "Erreur", f"Impossible d'ouvrir l'éditeur :\n{e}")
+            return
+        if dialog.exec() == EditorDialog.DialogCode.Accepted and dialog.saved_path:
+            # Re-scan so the new edited/ file appears with correct folder_tag/counts.
+            self._preview_cache.clear()
+            self._media = scan_folder(media._get_root())
+            self.gallery.load_files(self._media)
+            # Reveal the new edited image and select it.
+            self.gallery.show_filter("edited")
+            new_media = next((m for m in self._media if m.path == dialog.saved_path), None)
+            if new_media is not None:
+                self.gallery.select_media(new_media)
+            self._status.showMessage(f"Image améliorée enregistrée → edited/{dialog.saved_path.name}")
 
     def _on_preview_ready(self, path_str: str, pixmap: QPixmap):
         self._preview_cache[path_str] = pixmap
@@ -167,29 +279,14 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Erreur", f"Impossible de renommer :\n{e}")
             return
 
-        old_visible = self.gallery.visible_media
-        old_idx = next((i for i, m in enumerate(old_visible) if m is media), 0)
+        self._record_action([(new_path, old_path)])
+        old_idx = self._index_in_visible(media)
 
         self.gallery.update_card_path(old_path, new_path)
-
-        cached = self._preview_cache.pop(str(old_path), None)
-        if cached:
-            self._preview_cache[str(new_path)] = cached
-
+        self._preview_cache_move(old_path, new_path)
         self.gallery.refresh_filter()
 
-        new_visible = self.gallery.visible_media
-        new_idx = next((i for i, m in enumerate(new_visible) if m is media), None)
-
-        if new_idx is not None and new_idx < len(new_visible) - 1:
-            self.gallery.select_media(new_visible[new_idx + 1])
-        elif new_idx is not None:
-            # Renamed file is last in the current view — stay on it
-            self.tag_panel.load_media(media, self._preview_cache.get(str(new_path)))
-        else:
-            # File disappeared from the active filter (e.g. "Non revus" after rename)
-            self._navigate_after_removal(old_idx, new_visible)
-
+        self._advance_after_action(media, old_idx)
         self._status.showMessage(f"Renommé → {new_path.name}")
 
     def _on_delete(self, media: MediaFile):
@@ -202,8 +299,7 @@ class MainWindow(QMainWindow):
             return
 
         old_path = media.path
-        old_visible = self.gallery.visible_media
-        old_idx = next((i for i, m in enumerate(old_visible) if m is media), 0)
+        old_idx = self._index_in_visible(media)
 
         try:
             new_path = media.move_to_delete_folder()
@@ -211,21 +307,13 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Erreur", f"Impossible de déplacer :\n{e}")
             return
 
+        self._record_action([(new_path, old_path)])
+
         self._preview_cache.pop(str(old_path), None)
         self.gallery.update_card_path(old_path, new_path)
         self.gallery.refresh_filter()
 
-        new_visible = self.gallery.visible_media
-        new_idx = next((i for i, m in enumerate(new_visible) if m is media), None)
-
-        if new_idx is not None and new_idx < len(new_visible) - 1:
-            self.gallery.select_media(new_visible[new_idx + 1])
-        elif new_idx is not None:
-            # Rejected file is last in the current view — stay on it
-            self.tag_panel.load_media(media, self._preview_cache.get(str(new_path)))
-        else:
-            self._navigate_after_removal(old_idx, new_visible)
-
+        self._advance_after_action(media, old_idx)
         self._status.showMessage(f"Déplacé vers toDelete → {new_path.name}")
 
     def _on_batch_reject(self, media_list: list[MediaFile]):
@@ -240,15 +328,12 @@ class MainWindow(QMainWindow):
         if reply != QMessageBox.StandardButton.Yes:
             return
 
-        old_visible = self.gallery.visible_media
         current_in_batch = self._current in media_list
-        old_idx = (
-            next((i for i, m in enumerate(old_visible) if m is self._current), 0)
-            if current_in_batch else 0
-        )
+        old_idx = self._index_in_visible(self._current) if current_in_batch else 0
 
         moved = 0
         errors = []
+        action_pairs = []
         for media in media_list:
             old_path = media.path
             try:
@@ -256,10 +341,12 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 errors.append(f"{old_path.name} : {e}")
                 continue
+            action_pairs.append((new_path, old_path))
             self._preview_cache.pop(str(old_path), None)
             self.gallery.update_card_path(old_path, new_path)
             moved += 1
 
+        self._record_action(action_pairs)
         self.gallery.clear_marked()
         self.gallery.refresh_filter()
 
@@ -281,6 +368,26 @@ class MainWindow(QMainWindow):
             f"{moved} fichier{'s' if moved != 1 else ''} rejeté{'s' if moved != 1 else ''} → toDelete"
         )
 
+    def _index_in_visible(self, media: MediaFile | None) -> int:
+        if media is None:
+            return 0
+        visible = self.gallery.visible_media
+        return next((i for i, m in enumerate(visible) if m is media), 0)
+
+    def _advance_after_action(self, media: MediaFile, old_idx: int):
+        """After `media` moves out of its old slot (rename/reject), select the
+        next visible item, stay on it if it's still visible (now last in view),
+        or jump to the nearest remaining item if it left the active filter."""
+        new_visible = self.gallery.visible_media
+        new_idx = next((i for i, m in enumerate(new_visible) if m is media), None)
+
+        if new_idx is not None and new_idx < len(new_visible) - 1:
+            self.gallery.select_media(new_visible[new_idx + 1])
+        elif new_idx is not None:
+            self.tag_panel.load_media(media, self._preview_cache.get(str(media.path)))
+        else:
+            self._navigate_after_removal(old_idx, new_visible)
+
     def _navigate_after_removal(self, old_idx: int, visible: list[MediaFile]):
         if visible:
             nav_idx = min(old_idx, len(visible) - 1)
@@ -288,3 +395,54 @@ class MainWindow(QMainWindow):
         else:
             self._current = None
             self.tag_panel.clear()
+
+    # ------------------------------------------------------------------
+    def _record_action(self, pairs: list[tuple[Path, Path]]):
+        """Remember the last reversible move(s) — (current_path, original_path)
+        — for single-level Ctrl+Z undo. A new action overwrites the previous one."""
+        self._last_action = pairs if pairs else None
+        self._undo_action.setEnabled(bool(self._last_action))
+
+    def _on_undo(self):
+        if not self._last_action:
+            return
+        pairs = self._last_action
+        self._record_action([])
+        self.tag_panel.stop_video()
+
+        restored = 0
+        errors = []
+        for current_path, original_path in pairs:
+            media = next((m for m in self._media if m.path == current_path), None)
+            if media is None:
+                errors.append(f"{current_path.name} : fichier introuvable")
+                continue
+            if original_path.exists() and original_path != current_path:
+                errors.append(f"{original_path.name} : un fichier existe déjà à cet emplacement")
+                continue
+            try:
+                media.path.rename(original_path)
+            except OSError as e:
+                errors.append(f"{current_path.name} : {e}")
+                continue
+            self._preview_cache_move(current_path, original_path)
+            self.gallery.update_card_path(media.path, original_path)
+            media.path = original_path
+            restored += 1
+
+        self.gallery.refresh_filter()
+
+        if errors:
+            QMessageBox.warning(
+                self, "Annulation partielle",
+                f"{restored} fichier{'s' if restored != 1 else ''} restauré{'s' if restored != 1 else ''}.\n"
+                "Non annulés :\n" + "\n".join(errors),
+            )
+        self._status.showMessage(
+            f"Annulé — {restored} fichier{'s' if restored != 1 else ''} restauré{'s' if restored != 1 else ''}"
+        )
+
+    def _preview_cache_move(self, old_path: Path, new_path: Path):
+        cached = self._preview_cache.pop(str(old_path), None)
+        if cached:
+            self._preview_cache[str(new_path)] = cached

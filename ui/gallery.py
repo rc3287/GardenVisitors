@@ -3,7 +3,7 @@ from PyQt6.QtWidgets import (
     QWidget, QScrollArea, QGridLayout, QVBoxLayout, QHBoxLayout,
     QLabel, QFrame, QRadioButton, QButtonGroup, QPushButton,
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QThreadPool
+from PyQt6.QtCore import Qt, pyqtSignal, QThreadPool, QTimer
 from PyQt6.QtGui import QPixmap, QPainter, QColor, QFont
 
 from core.media import MediaFile
@@ -17,6 +17,7 @@ _FILTER_ALL = 0
 _FILTER_UNREVIEWED = 1
 _FILTER_DONE = 2
 _FILTER_TO_DELETE = 3
+_FILTER_EDITED = 4
 
 
 class ThumbnailCard(QFrame):
@@ -96,6 +97,14 @@ class GalleryWidget(QWidget):
         self._media_files: list[MediaFile] = []
         self._thumb_requested: set[str] = set()
         self._pool = QThreadPool.globalInstance()
+        self._last_cols = 0
+
+        # Resizing fires resizeEvent on every pixel of a window drag — debounce
+        # the (relatively expensive) grid rebuild until the resize settles.
+        self._resize_timer = QTimer(self)
+        self._resize_timer.setSingleShot(True)
+        self._resize_timer.setInterval(100)
+        self._resize_timer.timeout.connect(self._on_resize_settled)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -113,6 +122,7 @@ class GalleryWidget(QWidget):
         for fid, label in [
             (_FILTER_UNREVIEWED, "Non revus"),
             (_FILTER_DONE, "Traités"),
+            (_FILTER_EDITED, "Édités"),
             (_FILTER_TO_DELETE, "À effacer"),
             (_FILTER_ALL, "Tous"),
         ]:
@@ -184,6 +194,7 @@ class GalleryWidget(QWidget):
             else:
                 card.hide()
         cols = self._cols()
+        self._last_cols = cols
         for i, mf in enumerate(self._media_files):
             card = self._cards.get(str(mf.path))
             if card:
@@ -221,23 +232,26 @@ class GalleryWidget(QWidget):
 
     def _apply_filter(self):
         fid = self._filter_group.checkedId()
-        if fid == _FILTER_UNREVIEWED:
-            self._media_files = [m for m in self._all_media_files if m.folder_tag == "new"]
-        elif fid == _FILTER_DONE:
-            self._media_files = [m for m in self._all_media_files if m.folder_tag == "done"]
-        elif fid == _FILTER_TO_DELETE:
-            self._media_files = [m for m in self._all_media_files if m.folder_tag == "toDelete"]
+        tag = {
+            _FILTER_UNREVIEWED: "new",
+            _FILTER_DONE: "done",
+            _FILTER_TO_DELETE: "toDelete",
+            _FILTER_EDITED: "edited",
+        }.get(fid)
+        if tag is not None:
+            self._media_files = [m for m in self._all_media_files if m.folder_tag == tag]
         else:
             self._media_files = list(self._all_media_files)
         self._rebuild_grid()
 
     def _update_filter_counts(self):
-        counts = {"new": 0, "done": 0, "toDelete": 0}
+        counts = {"new": 0, "done": 0, "toDelete": 0, "edited": 0}
         for m in self._all_media_files:
             if m.folder_tag in counts:
                 counts[m.folder_tag] += 1
         self._filter_group.button(_FILTER_UNREVIEWED).setText(f"Non revus ({counts['new']})")
         self._filter_group.button(_FILTER_DONE).setText(f"Traités ({counts['done']})")
+        self._filter_group.button(_FILTER_EDITED).setText(f"Édités ({counts['edited']})")
         self._filter_group.button(_FILTER_TO_DELETE).setText(f"À effacer ({counts['toDelete']})")
         self._filter_group.button(_FILTER_ALL).setText(f"Tous ({len(self._all_media_files)})")
 
@@ -245,8 +259,29 @@ class GalleryWidget(QWidget):
         self._update_filter_counts()
         self._apply_filter()
 
+    def show_filter(self, tag: str):
+        """Switch the visible filter to a folder tag ('new'/'done'/'toDelete'/
+        'edited') or 'all'. Used e.g. to reveal a freshly edited image."""
+        fid = {
+            "new": _FILTER_UNREVIEWED, "done": _FILTER_DONE,
+            "toDelete": _FILTER_TO_DELETE, "edited": _FILTER_EDITED,
+            "all": _FILTER_ALL,
+        }.get(tag, _FILTER_ALL)
+        self._filter_group.button(fid).setChecked(True)
+        self._apply_filter()
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        self._resize_timer.start()
+
+    def _on_resize_settled(self):
+        # TODO: for very large folders, the scalable fix is to virtualize the
+        # grid (QListView/IconMode + model) so only visible rows materialize.
+        if self._cols() == self._last_cols:
+            # Column count unchanged — the layout already reflows on its own;
+            # just make sure newly-visible cards still get their thumbnails.
+            self._load_visible_thumbnails()
+            return
         self._rebuild_grid()
 
     # ------------------------------------------------------------------
@@ -261,7 +296,12 @@ class GalleryWidget(QWidget):
         self._thumb_requested.clear()
         self._all_media_files = media_files
         self._update_filter_counts()
-        self._filter_group.button(_FILTER_UNREVIEWED).setChecked(True)
+
+        # If nothing lives in a managed subfolder (new/done/toDelete), "Non revus"
+        # would show an empty grid even though files exist — default to "Tous" instead.
+        managed_present = any(mf.folder_tag != "other" for mf in media_files)
+        default_filter = _FILTER_UNREVIEWED if managed_present else _FILTER_ALL
+        self._filter_group.button(default_filter).setChecked(True)
 
         for mf in media_files:
             card = ThumbnailCard(mf)
